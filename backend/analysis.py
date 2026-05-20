@@ -78,8 +78,14 @@ def _bottleneck(current: Metric, trends: dict, anomalies: list[dict]) -> dict:
     }
 
 
-def build_analysis_summary(db: Session, limit: int) -> dict:
-    rows = db.query(Metric).order_by(desc(Metric.timestamp)).limit(limit).all()
+def build_analysis_summary(db: Session, node_id: int, limit: int) -> dict:
+    rows = (
+        db.query(Metric)
+        .filter(Metric.node_id == node_id)
+        .order_by(desc(Metric.timestamp))
+        .limit(limit)
+        .all()
+    )
     rows = list(reversed(rows))
 
     if not rows:

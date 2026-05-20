@@ -11,8 +11,13 @@ from analysis import build_analysis_summary
 from config import PROJECT_ROOT, RESOURCE_ROOT, settings
 from database import Base, SessionLocal, engine, get_db
 from metrics_collector import collect_metrics
-from models import Metric
-from schemas import MetricRead, MetricsSummary
+from models import Metric, Node
+from node_manager import (
+    assign_existing_metrics_to_node,
+    ensure_metrics_node_id_column,
+    get_or_create_local_node,
+)
+from schemas import MetricRead, MetricsSummary, NodeRead
 from system_info import (
     get_cpu_info,
     get_disks_info,
@@ -53,7 +58,72 @@ async def metrics_background_worker() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_metrics_node_id_column(engine)
+    db = SessionLocal()
+    try:
+        local_node = get_or_create_local_node(db)
+        assign_existing_metrics_to_node(db, local_node.id)
+    finally:
+        db.close()
     asyncio.create_task(metrics_background_worker())
+
+
+def get_node_or_404(db: Session, node_id: int) -> Node:
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Узел не найден")
+    return node
+
+
+def get_latest_metric_or_404(db: Session, node_id: int) -> Metric:
+    metric = (
+        db.query(Metric)
+        .filter(Metric.node_id == node_id)
+        .order_by(desc(Metric.timestamp))
+        .first()
+    )
+    if not metric:
+        raise HTTPException(status_code=404, detail="Для узла пока нет метрик")
+    return metric
+
+
+def build_metrics_summary(db: Session, node_id: int, limit: int) -> MetricsSummary:
+    rows = (
+        db.query(Metric)
+        .filter(Metric.node_id == node_id)
+        .order_by(desc(Metric.timestamp))
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return MetricsSummary(
+            records_count=0,
+            avg_cpu_percent=0,
+            max_cpu_percent=0,
+            avg_ram_percent=0,
+            max_ram_percent=0,
+            avg_disk_percent=0,
+            max_disk_percent=0,
+        )
+
+    records_count = len(rows)
+    return MetricsSummary(
+        records_count=records_count,
+        avg_cpu_percent=sum(row.cpu_percent for row in rows) / records_count,
+        max_cpu_percent=max(row.cpu_percent for row in rows),
+        avg_ram_percent=sum(row.ram_percent for row in rows) / records_count,
+        max_ram_percent=max(row.ram_percent for row in rows),
+        avg_disk_percent=sum(row.disk_percent for row in rows) / records_count,
+        max_disk_percent=max(row.disk_percent for row in rows),
+    )
+
+
+def build_node_analysis_summary(db: Session, node_id: int, limit: int) -> dict:
+    analysis = build_analysis_summary(db, node_id, limit)
+    node = get_node_or_404(db, node_id)
+    node.health_score = analysis["health_score"]
+    db.commit()
+    return analysis
 
 
 @app.get("/api/metrics/current", response_model=MetricRead)
@@ -70,7 +140,14 @@ def get_metrics_history(
     db: Session = Depends(get_db),
 ) -> list[Metric]:
     try:
-        rows = db.query(Metric).order_by(desc(Metric.timestamp)).limit(limit).all()
+        local_node = get_or_create_local_node(db)
+        rows = (
+            db.query(Metric)
+            .filter(Metric.node_id == local_node.id)
+            .order_by(desc(Metric.timestamp))
+            .limit(limit)
+            .all()
+        )
         return list(reversed(rows))
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Не удалось загрузить историю метрик") from exc
@@ -82,28 +159,8 @@ def get_metrics_summary(
     db: Session = Depends(get_db),
 ) -> MetricsSummary:
     try:
-        rows = db.query(Metric).order_by(desc(Metric.timestamp)).limit(limit).all()
-        if not rows:
-            return MetricsSummary(
-                records_count=0,
-                avg_cpu_percent=0,
-                max_cpu_percent=0,
-                avg_ram_percent=0,
-                max_ram_percent=0,
-                avg_disk_percent=0,
-                max_disk_percent=0,
-            )
-
-        records_count = len(rows)
-        return MetricsSummary(
-            records_count=records_count,
-            avg_cpu_percent=sum(row.cpu_percent for row in rows) / records_count,
-            max_cpu_percent=max(row.cpu_percent for row in rows),
-            avg_ram_percent=sum(row.ram_percent for row in rows) / records_count,
-            max_ram_percent=max(row.ram_percent for row in rows),
-            avg_disk_percent=sum(row.disk_percent for row in rows) / records_count,
-            max_disk_percent=max(row.disk_percent for row in rows),
-        )
+        local_node = get_or_create_local_node(db)
+        return build_metrics_summary(db, local_node.id, limit)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Не удалось рассчитать сводку метрик") from exc
 
@@ -125,9 +182,67 @@ def get_analysis_summary(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        return build_analysis_summary(db, limit)
+        local_node = get_or_create_local_node(db)
+        return build_node_analysis_summary(db, local_node.id, limit)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Не удалось выполнить анализ метрик") from exc
+
+
+@app.get("/api/nodes", response_model=list[NodeRead])
+def get_nodes(db: Session = Depends(get_db)) -> list[Node]:
+    local_node = get_or_create_local_node(db)
+    build_node_analysis_summary(db, local_node.id, 60)
+    return db.query(Node).order_by(Node.id).all()
+
+
+@app.get("/api/nodes/{node_id}", response_model=NodeRead)
+def get_node(node_id: int, db: Session = Depends(get_db)) -> Node:
+    return get_node_or_404(db, node_id)
+
+
+@app.get("/api/nodes/{node_id}/metrics/current", response_model=MetricRead)
+def get_node_current_metrics(node_id: int, db: Session = Depends(get_db)) -> Metric:
+    node = get_node_or_404(db, node_id)
+    if node.source_type == "local":
+        return collect_metrics(db)
+    return get_latest_metric_or_404(db, node_id)
+
+
+@app.get("/api/nodes/{node_id}/metrics/history", response_model=list[MetricRead])
+def get_node_metrics_history(
+    node_id: int,
+    limit: int = Query(default=60, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[Metric]:
+    get_node_or_404(db, node_id)
+    rows = (
+        db.query(Metric)
+        .filter(Metric.node_id == node_id)
+        .order_by(desc(Metric.timestamp))
+        .limit(limit)
+        .all()
+    )
+    return list(reversed(rows))
+
+
+@app.get("/api/nodes/{node_id}/metrics/summary", response_model=MetricsSummary)
+def get_node_metrics_summary(
+    node_id: int,
+    limit: int = Query(default=60, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> MetricsSummary:
+    get_node_or_404(db, node_id)
+    return build_metrics_summary(db, node_id, limit)
+
+
+@app.get("/api/nodes/{node_id}/analysis/summary")
+def get_node_analysis_summary(
+    node_id: int,
+    limit: int = Query(default=60, ge=2, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    get_node_or_404(db, node_id)
+    return build_node_analysis_summary(db, node_id, limit)
 
 
 @app.get("/api/system/info")
