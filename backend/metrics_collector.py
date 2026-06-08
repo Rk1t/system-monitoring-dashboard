@@ -23,10 +23,16 @@ def collect_metrics(db: Session) -> Metric:
 
     current_network = psutil.net_io_counters()
     current_time = time.monotonic()
-    elapsed = max(current_time - _last_network_time, 1)
+    elapsed = current_time - _last_network_time
+    if elapsed < 1:
+        elapsed = 1
 
     sent_per_sec = (current_network.bytes_sent - _last_network.bytes_sent) / elapsed
     recv_per_sec = (current_network.bytes_recv - _last_network.bytes_recv) / elapsed
+    if sent_per_sec < 0:
+        sent_per_sec = 0
+    if recv_per_sec < 0:
+        recv_per_sec = 0
 
     metric = Metric(
         node_id=local_node.id,
@@ -36,8 +42,8 @@ def collect_metrics(db: Session) -> Metric:
         disk_percent=psutil.disk_usage("/").percent,
         bytes_sent=current_network.bytes_sent,
         bytes_recv=current_network.bytes_recv,
-        network_sent_per_sec=max(sent_per_sec, 0),
-        network_recv_per_sec=max(recv_per_sec, 0),
+        network_sent_per_sec=sent_per_sec,
+        network_recv_per_sec=recv_per_sec,
     )
 
     db.add(metric)
@@ -66,6 +72,9 @@ def cleanup_old_metrics(db: Session, node_id: int, limit: int) -> None:
     if not old_records:
         return
 
-    old_ids = [record.id for record in old_records]
+    old_ids = []
+    for record in old_records:
+        old_ids.append(record.id)
+
     db.query(Metric).filter(Metric.id.in_(old_ids)).delete(synchronize_session=False)
     db.commit()

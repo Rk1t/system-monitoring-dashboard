@@ -34,7 +34,15 @@ if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
 
 Push-Location $FrontendDir
 try {
-    Invoke-CheckedCommand { npm.cmd run build } "Не удалось собрать frontend через npm run build."
+    & npm.cmd run build
+    if ($LASTEXITCODE -ne 0) {
+        $FrontendIndex = Join-Path $FrontendDir "dist\index.html"
+        if (-not (Test-Path $FrontendIndex)) {
+            throw "Не удалось собрать frontend через npm run build, и папка frontend\dist не найдена."
+        }
+
+        Write-Warning "npm run build завершился с ошибкой. Будет использована уже существующая сборка frontend\dist."
+    }
 }
 finally {
     Pop-Location

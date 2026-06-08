@@ -1,5 +1,6 @@
-.venv/
+**/.venv/
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -11,6 +12,9 @@ frontend/dist/
 
 database/*.db
 database/*.db-journal
+agent/agent_state.json
+backend/downloads/agents/*
+!backend/downloads/agents/.gitkeep
 dist/
 build/*
 !build/
@@ -19,3 +23,7 @@ build/*
 
 .env
 .DS_Store
+*.log
+*.7z
+*.zip
+* - Copy.*

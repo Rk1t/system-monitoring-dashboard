@@ -1,0 +1,14 @@
+﻿{
+  "server_url": "http://127.0.0.1:8000",
+  "enrollment_key": "smk_enroll_xxxxx",
+  "agent_token": "",
+  "node_id": null,
+  "agent_name": "Test Agent",
+  "send_interval_seconds": 5,
+  "process_snapshot_cooldown_seconds": 30,
+  "agent_version": "0.1.0"
+}
+
+
+
+

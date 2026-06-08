@@ -1,7 +1,6 @@
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +41,7 @@ class AppConfig(BaseModel):
     network_bottleneck_threshold_bytes_per_sec: float = Field(default=1048576, ge=1)
 
 
-def _load_config_data() -> dict[str, Any]:
+def _load_config_data() -> dict:
     if not CONFIG_PATH.exists():
         return {}
 

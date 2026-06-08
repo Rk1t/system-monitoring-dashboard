@@ -28,12 +28,24 @@ def get_system_info() -> dict:
 def get_cpu_info() -> dict:
     per_core = psutil.cpu_percent(interval=0.2, percpu=True)
     frequency = psutil.cpu_freq()
+
+    average_percent = 0
+    if per_core:
+        total = 0
+        for value in per_core:
+            total += value
+        average_percent = round(total / len(per_core), 2)
+
+    current_frequency = 0
+    if frequency:
+        current_frequency = round(frequency.current, 2)
+
     return {
         "physical_cores": psutil.cpu_count(logical=False) or 0,
         "logical_threads": psutil.cpu_count(logical=True) or 0,
-        "current_frequency_mhz": round(frequency.current, 2) if frequency else 0,
+        "current_frequency_mhz": current_frequency,
         "per_core_percent": per_core,
-        "average_percent": round(sum(per_core) / len(per_core), 2) if per_core else 0,
+        "average_percent": average_percent,
     }
 
 
@@ -75,7 +87,10 @@ def get_network_info() -> list[dict]:
 
     current = psutil.net_io_counters(pernic=True)
     current_time = time.monotonic()
-    elapsed = max(current_time - _last_network_time, 1)
+    elapsed = current_time - _last_network_time
+    if elapsed < 1:
+        elapsed = 1
+
     interfaces = []
 
     for name, counters in current.items():
@@ -84,8 +99,13 @@ def get_network_info() -> list[dict]:
         recv_speed = 0
 
         if previous:
-            sent_speed = max((counters.bytes_sent - previous.bytes_sent) / elapsed, 0)
-            recv_speed = max((counters.bytes_recv - previous.bytes_recv) / elapsed, 0)
+            sent_speed = (counters.bytes_sent - previous.bytes_sent) / elapsed
+            recv_speed = (counters.bytes_recv - previous.bytes_recv) / elapsed
+
+            if sent_speed < 0:
+                sent_speed = 0
+            if recv_speed < 0:
+                recv_speed = 0
 
         interfaces.append(
             {
@@ -104,7 +124,14 @@ def get_network_info() -> list[dict]:
 
 def get_processes(limit: int, sort: str) -> list[dict]:
     processes = []
-    sort_field = "memory_percent" if sort == "ram" else "cpu_percent"
+    sort_field = "cpu_percent"
+    if sort == "ram":
+        sort_field = "memory_percent"
+
+    logical_threads = psutil.cpu_count(logical=True)
+    if not logical_threads:
+        logical_threads = 1
+
     process_list = list(psutil.process_iter(["pid", "name"]))
 
     for process in process_list:
@@ -120,7 +147,13 @@ def get_processes(limit: int, sort: str) -> list[dict]:
             if process.pid == 0:
                 continue
 
-            cpu_percent = min(process.cpu_percent(interval=None), 100)
+            cpu_percent = process.cpu_percent(interval=None)
+            cpu_percent = cpu_percent / logical_threads
+            if cpu_percent < 0:
+                cpu_percent = 0
+            if cpu_percent > 100:
+                cpu_percent = 100
+
             processes.append(
                 {
                     "pid": process.pid,
@@ -132,4 +165,8 @@ def get_processes(limit: int, sort: str) -> list[dict]:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    return sorted(processes, key=lambda item: item[sort_field], reverse=True)[:limit]
+    def get_sort_value(item: dict) -> float:
+        return item[sort_field]
+
+    processes.sort(key=get_sort_value, reverse=True)
+    return processes[:limit]
