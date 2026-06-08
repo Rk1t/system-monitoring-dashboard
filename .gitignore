@@ -16,6 +16,7 @@ agent/agent_state.json
 backend/downloads/agents/*
 !backend/downloads/agents/.gitkeep
 dist/
+deploy/
 build/*
 !build/
 !build/SystemMonitor.spec
