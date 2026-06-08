@@ -287,8 +287,6 @@ Frontend не использует сложный роутинг. Навигац
 - `first_seen` - первое появление;
 - `last_seen` - последнее обновление.
 
-Для учебного прототипа Redfish credentials хранятся в SQLite. В промышленном режиме пароль должен храниться безопаснее: через переменные окружения, секреты или специализированное хранилище.
-
 ### `users`
 
 Таблица пользователей web-хаба.
@@ -304,7 +302,6 @@ Frontend не использует сложный роутинг. Навигац
 - `created_at`;
 - `last_login`.
 
-Пароль не хранится в открытом виде. Для хэширования используется `hashlib.pbkdf2_hmac` с salt.
 
 ### `organizations`
 
@@ -334,7 +331,6 @@ Frontend не использует сложный роутинг. Навигац
 - `admin` - добавление пользователей, управление ролями `viewer/admin`, управление узлами, enrollment keys, Download Center и iLO/iDRAC;
 - `viewer` - только просмотр систем, метрик и диагностики.
 
-В текущей версии создается стартовая организация `Default Organization` и пользователь `admin`.
 
 ### `metrics`
 
@@ -446,9 +442,6 @@ Top-процессы внутри snapshot.
 smk_enroll_xxxxxxxxxxxxxxxxx
 ```
 
-В базе хранится только `key_hash` и `prefix`. Открытый ключ показывается пользователю только один раз при создании.
-
-### `agent_tokens`
 
 Токены конкретных агентов.
 
@@ -468,7 +461,6 @@ smk_enroll_xxxxxxxxxxxxxxxxx
 smk_agent_xxxxxxxxxxxxxxxxx
 ```
 
-В базе хранится только hash и prefix. Agent token используется для дальнейшей отправки telemetry и process snapshots от конкретного узла.
 
 ## 9. Основные API endpoints
 
@@ -489,21 +481,6 @@ http://127.0.0.1:8000/docs
 - `POST /api/auth/login` - вход пользователя и выдача JWT access token;
 - `GET /api/auth/me` - информация о текущем пользователе и его организациях.
 
-Стартовый пользователь после первого запуска:
-
-```text
-username: admin
-password: admin123
-```
-
-Пример login-запроса:
-
-```json
-{
-  "username": "admin",
-  "password": "admin123"
-}
-```
 
 Защищенные запросы должны отправляться с заголовком:
 
@@ -551,7 +528,6 @@ Authorization: Bearer <access_token>
 - `GET /api/nodes/{node_id}/process-snapshots/latest` - последний snapshot;
 - `GET /api/nodes/{node_id}/process-snapshots?limit=N` - история snapshots.
 
-Agent endpoints не используют пользовательский JWT. Агент не логинится как пользователь: первичная установка идет через enrollment key, а дальнейшая отправка telemetry идет через отдельный agent token.
 
 ### Enrollment Keys API
 
@@ -634,11 +610,6 @@ cd "C:\Users\Alin\Documents\New project\backend"
 .\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Если PowerShell не принимает путь из-за пробела, используйте полный путь:
-
-```powershell
-& "C:\Users\Alin\Documents\New project\backend\.venv\Scripts\python.exe" "C:\Users\Alin\Documents\New project\backend\run.py"
-```
 
 После запуска доступны:
 
@@ -1310,8 +1281,6 @@ Frontend по-прежнему не использует сложный роут
 - `#users` - пользователи организации;
 - `#node-{id}` - страница конкретного узла.
 
-За счет этого переход `Системы -> Узел -> Назад` работает ожидаемо: кнопка браузера `Back` возвращает пользователя к списку систем, а не к экрану login. Кнопка `Назад к системам` также переводит на главный список.
-
 ### Плавное обновление данных
 
 Для dashboard выбранного узла разделены два состояния:
@@ -1387,78 +1356,7 @@ cd "C:\Users\Alin\Documents\New project"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build\build_exe.ps1
 ```
 
-Если обычный запуск `.ps1` запрещен политикой PowerShell, вариант с `-ExecutionPolicy Bypass` запускает скрипт только для текущей команды.
-Скрипт сначала пытается выполнить `npm.cmd run build`, затем копирует `frontend/dist` в `static/` и запускает PyInstaller.
-Если в конкретной Windows-среде `npm` временно не смог запустить `esbuild`, но `frontend/dist` уже существует, скрипт покажет предупреждение и продолжит сборку с имеющимся `frontend/dist`.
-
-Результат:
-
-```text
-dist/SystemMonitor/SystemMonitor.exe
-```
-
-После запуска exe должен стартовать локальный FastAPI-сервер и открыться браузер. Исходники при этом остаются редактируемыми: backend, frontend, agent и конфигурация не удаляются и не переносятся.
-
-## 23. Развертывание на Ubuntu/VPS
-
-Проект подготовлен к установке центрального backend на Ubuntu-сервер без Docker. Для этого добавлены файлы в папке `deploy/ubuntu/`:
-
-- `install_backend.sh` - установка проекта в `/opt/system-monitor`;
-- `system-monitor.service` - systemd-служба для FastAPI backend;
-- `config.server.example.json` - серверный вариант `config.json` с `server_host = 0.0.0.0`;
-- `nginx.system-monitor.conf` - необязательный пример reverse proxy через nginx.
-
-Основная команда на Ubuntu после загрузки проекта:
-
-```bash
-cd /tmp/system-monitor
-sudo bash deploy/ubuntu/install_backend.sh
-```
-
-После установки backend работает как служба:
-
-```bash
-sudo systemctl status system-monitor
-sudo journalctl -u system-monitor -n 50 --no-pager
-```
-
-Web-интерфейс открывается с другого устройства по адресу:
-
-```text
-http://SERVER_IP:8000
-```
-
-Если включен firewall, нужно открыть порт:
-
-```bash
-sudo ufw allow 8000/tcp
-```
-
-Для подключения агентов с других устройств важно указывать в агенте не `127.0.0.1`, а адрес VPS:
-
-```text
-http://SERVER_IP:8000
-```
-
-Linux-бинарники агента собираются на Linux:
-
-```bash
-cd /opt/system-monitor
-sudo -u system-monitor bash agent/build_linux.sh
-```
-
-После сборки Download Center сможет отдавать:
-
-- `agent-linux-gui`;
-- `agent-linux-server`.
-
-Подробная инструкция находится в отдельном файле:
-
-```text
-UBUNTU_DEPLOY.md
-```
-
-## 24. Ограничения текущей версии
+## 23. Ограничения текущей версии
 
 - Redfish проверен через mock-режим.
 - Реальный HPE iLO / Dell iDRAC требует физического сервера, сетевой доступности и корректных credentials.
@@ -1473,7 +1371,7 @@ UBUNTU_DEPLOY.md
 - WebSocket не используется; обновление данных выполняется периодическими HTTP-запросами.
 - Диагностика основана на простых правилах, без ML/LLM.
 
-## 25. Направления развития
+## 24. Направления развития
 
 Возможные направления дальнейшей работы:
 
@@ -1488,24 +1386,3 @@ UBUNTU_DEPLOY.md
 - установка агента через installer/CLI с передачей enrollment key;
 - экспорт отчетов для администратора;
 - расширение диагностических правил;
-- подготовка установщика для Windows.
-
-## 26. Что можно показать на защите
-
-На текущем этапе можно демонстрировать:
-
-- центральный список систем;
-- экран входа `admin/admin123`;
-- пользователя `admin` в `Default Organization` с ролью `owner`;
-- страницу `Ключи подключения`;
-- создание enrollment key с одноразовым показом открытого ключа;
-- локальный узел `Local System`;
-- внешний узел `Test Agent`;
-- mock HPE iLO;
-- mock Dell iDRAC;
-- графики и карточки метрик;
-- диагностику состояния каждого узла;
-- аппаратное состояние iLO/iDRAC;
-- выборочный snapshot процессов при высокой нагрузке;
-- REST API в Swagger UI;
-- структуру базы данных и привязку метрик к `node_id`.
